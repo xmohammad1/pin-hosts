@@ -1,0 +1,88 @@
+# pin-hosts
+
+Pin a domain's IPs in `/etc/hosts`, for example the REALITY `dest` `www.apple.com`, so Xray stops sending a DNS query for it on every inbound connection. A cron job health-checks the pinned IPs and refreshes them every hour.
+
+REALITY dials its `dest` for every incoming connection, and Xray (Go) does not cache DNS. Without a local cache, a busy node sends one or two DNS queries per connection to its resolver. Each lost DNS packet then adds `timeout` seconds to that connection's handshake. On one busy node, pinning took this from **1284 to 0 DNS queries in 15 seconds**.
+
+## One-click install
+
+Run as root:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/xmohammad1/pin-hosts/main/pin-hosts.sh) install
+```
+
+The installer asks which domains to pin:
+
+```
+Domains to pin in /etc/hosts, comma-separated [www.apple.com]:
+```
+
+- Press **Enter** to keep the default `www.apple.com`. On a reinstall, Enter keeps the domains you already have.
+- Separate several domains with commas: `www.apple.com, tgju.org`.
+
+To install without the prompt, pass the domains as an argument:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/xmohammad1/pin-hosts/main/pin-hosts.sh) install www.apple.com,tgju.org
+```
+
+Running the one-click command again updates the script and keeps your settings.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `pin-hosts.sh status` | Shows the pinned IPs with a live TLS check, whether each Docker container's hosts file is in sync, and the cron line. |
+| `pin-hosts.sh verify [seconds]` | Counts DNS queries for the pinned domains on all interfaces (default 15 s, needs `tcpdump`). Run it before and after installing to compare. |
+| `pin-hosts.sh update` | Refreshes the pins now. Cron runs this every hour. |
+| `pin-hosts.sh install [domains]` | Installs or reinstalls the script, asking for domains when none are given. |
+| `pin-hosts.sh uninstall` | Removes the pins from the host and the containers, plus the cron job, the settings file and the script. |
+
+## How it works
+
+- **Resolves from the server itself.** CDN answers depend on location, so the IPs come from the node's own upstream DNS (`/etc/resolv.conf`, or systemd-resolved's upstream list). Loopback stubs are skipped, because systemd-resolved and dnsmasq answer from `/etc/hosts` and would return the old pins. `8.8.8.8` and `1.1.1.1` are the fallback.
+- **Keeps only working IPs.** Each candidate must pass a real TLS handshake with a valid certificate for the domain. The fastest fresh DNS answers win, up to `KEEP` per address family. If no IP passes (DNS down, network blip), the old entries stay as they are.
+- **Patches Docker containers.** A host-network container such as `pg-node` gets a *copy* of `/etc/hosts` only when it starts. The script rewrites each running host-network container's hosts file in place, so no container restart is needed. Go re-reads the hosts file within about 5 seconds.
+- **Owns one block only.** Everything lives between `# BEGIN pin-hosts` and `# END pin-hosts`, and the rest of `/etc/hosts` is left alone. The first run saves a backup to `/etc/hosts.pin-hosts.bak`.
+- **Refreshes hourly at a random minute**, so several nodes don't all hit the CDN at once.
+
+## Settings
+
+Settings are in `/etc/pin-hosts.conf`. Run `pin-hosts.sh update` after editing, or `pin-hosts.sh install` after changing `INTERVAL`.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `DOMAINS` | `www.apple.com` | Space-separated list of domains to pin |
+| `KEEP` | `2` | Number of IPs kept per address family |
+| `PREFER` | `6` | Family written first (`6` or `4`). Go dials the first family listed first. |
+| `IPV6` | `auto` | `auto` pins IPv6 only when the server has an IPv6 route. Also `on` or `off`. |
+| `RESOLVER` | `auto` | DNS servers to ask, e.g. `"185.12.64.1 8.8.8.8"` |
+| `CONTAINERS` | `auto` | `auto` = every running host-network container, `none`, or a list of container names |
+| `INTERVAL` | `60` | Minutes between refreshes: 1–59 or whole hours (60, 120…) |
+
+## Requirements
+
+- Linux, root and bash.
+- `curl` and `dig` are installed automatically with apt, dnf or yum.
+- Docker is optional.
+- `tcpdump` is needed only for `verify`.
+
+The name resolution order in `/etc/nsswitch.conf` must have `files` before `dns`, which is the default on Debian and Ubuntu. `status` checks this inside each container as well.
+
+---
+
+## راهنمای فارسی
+
+این اسکریپت IPهای یک دامنه، مثلاً dest ریالیتی `www.apple.com`، را داخل `/etc/hosts` می‌گذارد تا Xray برای هر کانکشن از DNS نپرسد.
+
+نصب با یک دستور (با کاربر root):
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/xmohammad1/pin-hosts/main/pin-hosts.sh) install
+```
+
+- **پرسیدن دامنه‌ها:** موقع نصب می‌پرسد برای چه دامنه‌هایی انجام شود. اگر چند دامنه دارید، آن‌ها را با `,` جدا کنید. اگر چیزی وارد نکنید و Enter بزنید، همان `www.apple.com` در نظر گرفته می‌شود.
+- **فایل hosts داخل کانتینر:** فایل hosts کانتینرهای host network (مثل pg-node) هم بدون ری‌استارت آپدیت می‌شود.
+- **آپدیت ساعتی:** هر ساعت IPها با یک TLS handshake واقعی تست می‌شوند و اگر IPی از کار افتاده باشد، با IP جدید جایگزین می‌شود.
+- **دستورها:** `pin-hosts.sh status` وضعیت را نشان می‌دهد، `pin-hosts.sh verify 15` تعداد کوئری‌های DNS را می‌شمارد و `pin-hosts.sh uninstall` همه چیز را حذف می‌کند.
