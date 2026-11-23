@@ -20,7 +20,7 @@ set -uo pipefail
 export LC_ALL=C
 umask 022
 
-VERSION=1.2.0
+VERSION=1.2.1
 REPO_RAW=${PIN_HOSTS_URL:-https://raw.githubusercontent.com/xmohammad1/pin-hosts/main/pin-hosts.sh}
 SELF=/usr/local/sbin/pin-hosts.sh
 CONF=/etc/pin-hosts.conf
@@ -479,11 +479,13 @@ AccuracySec=1s
 [Install]
 WantedBy=timers.target
 EOF
+    # No After=cloud-final.service: cloud-final runs after multi-user.target, which wants this unit, so systemd
+    # found an ordering cycle and deleted the boot job at every boot. cmd_boot waits for cloud-init itself.
     cat > "$UNIT_DIR/$TAG-boot.service" <<EOF || die "cannot write $UNIT_DIR/$TAG-boot.service"
 [Unit]
 Description=pin-hosts: put the block back after boot (cloud-init may rebuild /etc/hosts)
 Wants=network-online.target
-After=network-online.target cloud-final.service docker.service
+After=network-online.target docker.service
 
 [Service]
 Type=simple
